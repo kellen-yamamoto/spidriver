@@ -1,5 +1,4 @@
-obj-m += halboard.o
-obj-m += avraudio.o
+obj-m += spi_gpio_driver.o
 
 all:
 	make -C /lib/modules/$(shell uname -r)/build M=$(PWD) modules
