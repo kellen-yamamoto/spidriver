@@ -1,4 +1,4 @@
-obj-m += spi_gpio_driver.o
+obj-m += gpio_spi_driver.o
 
 all:
 	make -C /lib/modules/$(shell uname -r)/build M=$(PWD) modules
