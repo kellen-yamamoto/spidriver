@@ -57,12 +57,14 @@ static int gpio_read8(struct spi_device *spi, int cmd)
 	return ret;
 }
 
+/*
 static int gpio_read16(struct spi_device *spi, int cmd)
 {
 	int ret;
 	ret = spi_w8r16(spi, cmd);
 	return ret;
 }
+*/
 
 static int gpio_write8(struct spi_device *spi, int cmd, u8 val)
 {
@@ -78,7 +80,7 @@ static ssize_t show_cmd(struct device *dev, struct device_attribute *attr, char 
 	return sprintf(buf, "%d\n", pdata->cmd);
 }
 
-static ssize_t set_cmd(struct device *dev, struct device_attribute *attr, char *buf, size_t count)
+static ssize_t set_cmd(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
 {
 	struct gpio_data *pdata = dev_get_drvdata(dev);
 	
@@ -103,7 +105,7 @@ static ssize_t show_data(struct device *dev, struct device_attribute *attr, char
 	return sprintf(buf, "%d\n", gpio_read8(spi, pdata->cmd));
 }
 
-static ssize_t set_data(struct device *dev, struct device_attribute *attr, char *buf, size_t count)
+static ssize_t set_data(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
 {
 	struct spi_device *spi = to_spi_device(dev);
 	struct gpio_data *pdata = dev_get_drvdata(dev);
