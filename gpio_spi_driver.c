@@ -27,10 +27,6 @@
 #define SPI_BUS_CS2 1
 #define SPI_BUS_SPEED 10000000
 
-#define INST_MODE_bm	(1<<7)
-#define INST_READ_bm	(1<<6)
-#define INST_16BIT_bm	(1<<5)
-
 
 /*---------- Driver Info ------------*/
 static struct spi_gpio_platform_data spi_master_data = {
@@ -41,7 +37,7 @@ static struct spi_gpio_platform_data spi_master_data = {
 };
 
 struct gpio_data {
-	int reg;
+	int cmd;
 };
 
 
@@ -54,59 +50,57 @@ static struct platform_device spi_master = {
 };
 
 /*---------- Register Access ------------*/
-static int gpio_read_reg8(struct spi_device *spi, int reg)
+static int gpio_read8(struct spi_device *spi, int cmd)
 {
 	int ret;
-	reg = reg | INST_READ_bm;
-	ret = spi_w8r8(spi, reg);
+	ret = spi_w8r8(spi, cmd);
 	return ret;
 }
 
-static int gpio_read_reg16(struct spi_device *spi, int reg)
+static int gpio_read16(struct spi_device *spi, int cmd)
 {
 	int ret;
-	reg = reg | INST_READ_bm | INST_16BIT_bm;
-	ret = spi_w8r16(spi, reg);
+	ret = spi_w8r16(spi, cmd);
 	return ret;
 }
 
-static int gpio_write_reg8(struct spi_device *spi, int reg, u8 val)
+static int gpio_write8(struct spi_device *spi, int cmd, u8 val)
 {
-	u8 tmp[2] = {reg, val};
+	u8 tmp[2] = {cmd, val};
 	return spi_write(spi, tmp, sizeof(tmp));
 }
 
 /*---------- SYSFS Interface ------------*/
 
-static ssize_t show_reg(struct device *dev, struct device_attribute *attr, char *buf)
+static ssize_t show_cmd(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct gpio_data *pdata = dev_get_drvdata(dev);
-	return sprintf(buf, "%d\n", pdata->reg);
+	return sprintf(buf, "%d\n", pdata->cmd);
 }
 
-static ssize_t set_reg(struct device *dev, struct device_attribute *attr, char *buf, size_t count)
+static ssize_t set_cmd(struct device *dev, struct device_attribute *attr, char *buf, size_t count)
 {
 	struct gpio_data *pdata = dev_get_drvdata(dev);
 	
-	u8 reg;
+	u8 cmd;
 	int error;
 	
-	error = kstrtou8(buf, 10, &reg);
+	error = kstrtou8(buf, 10, &cmd);
 	if (error)
 		return error;
-	pdata->reg = reg;
-	printk("Wrote %d to addr\n", reg);
+	pdata->cmd = cmd;
+	printk("Wrote %d to addr\n", cmd);
 	
 	return count;
 }
 
-static DEVICE_ATTR(reg, S_IWUSR | S_IRUGO, show_reg, set_reg);
+static DEVICE_ATTR(cmd, S_IWUSR | S_IRUGO, show_cmd, set_cmd);
 
 static ssize_t show_data(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct spi_device *spi = to_spi_device(dev);
 	struct gpio_data *pdata = dev_get_drvdata(dev);
-	return sprintf(buf, "%d\n", gpio_read_reg8(spi, pdata->reg));
+	return sprintf(buf, "%d\n", gpio_read8(spi, pdata->cmd));
 }
 
 static ssize_t set_data(struct device *dev, struct device_attribute *attr, char *buf, size_t count)
@@ -121,14 +115,14 @@ static ssize_t set_data(struct device *dev, struct device_attribute *attr, char 
 	if (error)
 		return error;
 	
-	gpio_write_reg8(spi, pdata->reg, val);
+	gpio_write8(spi, pdata->cmd, val);
 	return count;
 }
 	
 static DEVICE_ATTR(data, S_IWUSR | S_IRUGO, show_data, set_data);
  
 static struct attribute *gpio_attributes[] = {
-	&dev_attr_reg.attr,
+	&dev_attr_cmd.attr,
 	&dev_attr_data.attr,
 	NULL
 };
