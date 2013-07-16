@@ -21,6 +21,10 @@
 #define GPIO2 27
 #define GPIO3 23
 #define GPIO4 24
+#define GPIO5 2
+#define GPIO6 3
+
+
 
 #define SPI_BUS 1
 #define SPI_BUS_CS1 0
@@ -30,9 +34,9 @@
 
 /*---------- Driver Info ------------*/
 static struct spi_gpio_platform_data spi_master_data = {
-	.sck = GPIO1,
-	.mosi = GPIO2,
-	.miso = GPIO3,
+	.sck = GPIO4,
+	.mosi = GPIO1,
+	.miso = GPIO2,
 	.num_chipselect = 1
 };
 
