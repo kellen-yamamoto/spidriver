@@ -14,6 +14,7 @@
 #include <linux/spi/spi_bitbang.h>
 #include <linux/gpio.h>
 #include <linux/module.h>
+#include <linux/mutex.h>
 
 #define PFX "gpio: "
 
@@ -23,7 +24,9 @@
 #define GPIO4 24
 #define GPIO5 2
 #define GPIO6 3
-
+#define GPIO_SCK GPIO4
+#define GPIO_MOSI GPIO1
+#define GPIO_MISO GPIO2
 
 
 #define SPI_BUS 1
@@ -34,13 +37,14 @@
 
 /*---------- Driver Info ------------*/
 static struct spi_gpio_platform_data spi_master_data = {
-	.sck = GPIO4,
-	.mosi = GPIO1,
-	.miso = GPIO2,
+	.sck = GPIO_SCK,
+	.mosi = GPIO_MOSI,
+	.miso = GPIO_MISO,
 	.num_chipselect = 1
 };
 
 struct gpio_data {
+    struct mutex lock;
 	int cmd;
 };
 
@@ -80,23 +84,33 @@ static int gpio_write8(struct spi_device *spi, int cmd, u8 val)
 
 static ssize_t show_cmd(struct device *dev, struct device_attribute *attr, char *buf)
 {
+    int ret;
 	struct gpio_data *pdata = dev_get_drvdata(dev);
-	return sprintf(buf, "%d\n", pdata->cmd);
+
+    mutex_lock(&pdata->lock);
+
+    ret = sprintf(buf, "%d\n", pdata->cmd);
+
+    mutex_unlock(&pdata->lock);
+
+    return ret;
 }
 
 static ssize_t set_cmd(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
 {
 	struct gpio_data *pdata = dev_get_drvdata(dev);
-	
 	u8 cmd;
 	int error;
 	
+    mutex_lock(&pdata->lock);
+
 	error = kstrtou8(buf, 10, &cmd);
 	if (error)
 		return error;
 	pdata->cmd = cmd;
-	printk("Wrote %d to addr\n", cmd);
 	
+    mutex_unlock(&pdata->lock);
+
 	return count;
 }
 
@@ -104,33 +118,56 @@ static DEVICE_ATTR(cmd, S_IWUSR | S_IRUGO, show_cmd, set_cmd);
 
 static ssize_t show_data(struct device *dev, struct device_attribute *attr, char *buf)
 {
+    int ret;
 	struct spi_device *spi = to_spi_device(dev);
 	struct gpio_data *pdata = dev_get_drvdata(dev);
-	return sprintf(buf, "%d\n", gpio_read8(spi, pdata->cmd));
+
+    mutex_lock(&pdata->lock);
+
+    ret = sprintf(buf, "%d\n", gpio_read8(spi, pdata->cmd));
+
+    mutex_unlock(&pdata->lock);
+
+	return ret;
 }
 
 static ssize_t set_data(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
 {
 	struct spi_device *spi = to_spi_device(dev);
 	struct gpio_data *pdata = dev_get_drvdata(dev);
-	
 	u8 val;
 	int error;
+	
+    mutex_lock(&pdata->lock);
 		
 	error = kstrtou8(buf, 10, &val);
 	if (error)
 		return error;
 	
 	gpio_write8(spi, pdata->cmd, val);
+
+    mutex_unlock(&pdata->lock);
+
 	return count;
 }
 	
 static DEVICE_ATTR(data, S_IWUSR | S_IRUGO, show_data, set_data);
  
+static ssize_t show_sem(struct device *dev, struct device_attribute *attr, char *buf)
+{
+}
+
+static ssize_t set_sem(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
+{
+}
+
+static DEVICE_ATTR(sem, S_IWUSR | S_IRUGO, show_sem, set_sem);
+
 static struct attribute *gpio_attributes[] = {
 	&dev_attr_cmd.attr,
 	&dev_attr_data.attr,
-	NULL
+    &dev_attr_sem.attr,
+    NULL
 };
 
 static const struct attribute_group gpio_group = {
@@ -203,6 +240,9 @@ static int __init add_gpio_device_to_bus(void)
 			pdata = devm_kzalloc(&spi_device->dev, sizeof(struct gpio_data), GFP_KERNEL);
 			if (!pdata)
 				return -ENOMEM;
+
+            mutex_init(&pdata->lock);
+
 			spi_set_drvdata(spi_device, pdata);
 			
 			/* Add sysfs files */
@@ -221,7 +261,7 @@ static int __init add_gpio_device_to_bus(void)
 
 static int __init gpio_modinit(void)
 {
-	printk(KERN_INFO PFX "init.\n");
+	printk("gpio-spi init.\n");
 
 	platform_device_register(&spi_master);
 
@@ -229,17 +269,21 @@ static int __init gpio_modinit(void)
 	add_gpio_device_to_bus();
 	printk(KERN_INFO PFX "add_gpio_to_bus() done.\n");
 
+    gpio_free(GPIO_SCK);    
+    gpio_free(GPIO_MOSI);    
+    gpio_free(GPIO_MISO);    
+
 	return 0;
 }
 module_init(gpio_modinit);
 
 static void __exit gpio_modexit(void)
 {
-	printk(KERN_INFO PFX "exit.\n");
+	printk(KERN_INFO PFX "gpio-spi exit.\n");
+    platform_device_unregister(&spi_master);
 }
 module_exit(gpio_modexit);
 
 
-MODULE_AUTHOR("Kellen Yamamoto");
-MODULE_DESCRIPTION("Generic GPIO SPI driver with sysfs interface");
+MODULE_DESCRIPTION("SPI GPIO Driver for RPi with sysfs interface");
 MODULE_LICENSE("GPL");
