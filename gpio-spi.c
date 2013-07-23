@@ -23,11 +23,12 @@
 #define GPIO3 23
 #define GPIO4 24
 #define GPIO5 2
-#define GPIO6 3
+
 #define GPIO_SCK GPIO4
 #define GPIO_MOSI GPIO1
 #define GPIO_MISO GPIO2
-
+#define GPIO_RESERVED GPIO3
+#define GPIO_EN GPIO5
 
 #define SPI_BUS 1
 #define SPI_BUS_CS1 0
@@ -152,21 +153,69 @@ static ssize_t set_data(struct device *dev, struct device_attribute *attr, const
 }
 	
 static DEVICE_ATTR(data, S_IWUSR | S_IRUGO, show_data, set_data);
- 
-static ssize_t show_sem(struct device *dev, struct device_attribute *attr, char *buf)
+
+static const struct gpio spi_gpios[] __initconst_or_module = {
+    {
+        .gpio   = GPIO_SCK,
+        .flags  = GPIOF_OUT_INIT_LOW,
+        .label  = "gpio-sck",
+    },
+    {
+        .gpio   = GPIO_MOSI,
+        .flags  = GPIOF_OUT_INIT_LOW,
+        .label  = "gpio-mosi",
+    },
+    {
+        .gpio   = GPIO_MISO,
+        .flags  = GPIOF_DIR_IN,
+        .label  = "gpio-miso",
+    },
+    {
+        .gpio   = GPIO_EN,
+        .flags  = GPIOF_OUT_INIT_HIGH,
+        .label  = "gpio-en",
+    },
+    {
+        .gpio   = GPIO_RESERVED,
+        .label  = "Reserved-spi"
+    },
+};
+
+static ssize_t show_lock(struct device *dev, struct device_attribute *attr, char *buf)
 {
+    int ret;
+    struct gpio_data *pdata = dev_get_drvdata(dev);
+
+    mutex_lock(&pdata->lock);
+
+    if (gpio_request_array(spi_gpios, ARRAY_SIZE(spi_gpios)))
+        ret = sprintf(buf, "%d\n", 0);
+    else ret = sprintf(buf, "%d\n", 1);
+
+    mutex_unlock(&pdata->lock);
+
+    return ret;
 }
 
-static ssize_t set_sem(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
+static ssize_t set_lock(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
 {
+    struct gpio_data *pdata = dev_get_drvdata(dev);
+    
+    mutex_lock(&pdata->lock);
+
+    gpio_free_array(spi_gpios, ARRAY_SIZE(spi_gpios));
+
+    mutex_unlock(&pdata->lock);
+
+    return count;
 }
 
-static DEVICE_ATTR(sem, S_IWUSR | S_IRUGO, show_sem, set_sem);
+static DEVICE_ATTR(lock, S_IWUSR | S_IRUGO, show_lock, set_lock);
 
 static struct attribute *gpio_attributes[] = {
 	&dev_attr_cmd.attr,
 	&dev_attr_data.attr,
-    &dev_attr_sem.attr,
+    &dev_attr_lock.attr,
     NULL
 };
 
@@ -247,7 +296,7 @@ static int __init add_gpio_device_to_bus(void)
 			
 			/* Add sysfs files */
 			err = sysfs_create_group(&spi_device->dev.kobj, &gpio_group);
-			if(err < 0)
+			if (err < 0)
 				return err;
 		}
 	}
@@ -269,9 +318,7 @@ static int __init gpio_modinit(void)
 	add_gpio_device_to_bus();
 	printk(KERN_INFO PFX "add_gpio_to_bus() done.\n");
 
-    gpio_free(GPIO_SCK);    
-    gpio_free(GPIO_MOSI);    
-    gpio_free(GPIO_MISO);    
+    gpio_free_array(spi_gpios, ARRAY_SIZE(spi_gpios));    
 
 	return 0;
 }
