@@ -16,8 +16,6 @@
 #include <linux/module.h>
 #include <linux/mutex.h>
 
-#define PFX "gpio: "
-
 #define GPIO1 17
 #define GPIO2 27
 #define GPIO3 23
@@ -106,8 +104,10 @@ static ssize_t set_cmd(struct device *dev, struct device_attribute *attr, const 
     mutex_lock(&pdata->lock);
 
 	error = kstrtou8(buf, 10, &cmd);
-	if (error)
+	if (error) {
+        mutex_unlock(&pdata->lock);
 		return error;
+    }
 	pdata->cmd = cmd;
 	
     mutex_unlock(&pdata->lock);
@@ -142,8 +142,11 @@ static ssize_t set_data(struct device *dev, struct device_attribute *attr, const
     mutex_lock(&pdata->lock);
 		
 	error = kstrtou8(buf, 10, &val);
-	if (error)
+	
+    if (error) {
+        mutex_unlock(&pdata->lock);
 		return error;
+    }
 	
 	gpio_write8(spi, pdata->cmd, val);
 
