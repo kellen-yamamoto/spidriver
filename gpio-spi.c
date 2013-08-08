@@ -22,11 +22,11 @@
 #define GPIO4 24
 #define GPIO5 2
 
-#define GPIO_SCK GPIO4
-#define GPIO_MOSI GPIO1
-#define GPIO_MISO GPIO2
-#define GPIO_RESERVED GPIO3
-#define GPIO_EN GPIO5
+#define GPIO_SCK GPIO2
+#define GPIO_MOSI GPIO3
+#define GPIO_MISO GPIO4
+#define GPIO_EN GPIO1
+#define GPIO_RESERVED GPIO5
 
 #define SPI_BUS 1
 #define SPI_BUS_CS1 0
@@ -44,7 +44,9 @@ static struct spi_gpio_platform_data spi_master_data = {
 
 struct gpio_data {
     struct mutex lock;
-	int cmd;
+    uint8_t numcmd;
+    uint8_t numrw;
+    uint8_t cmd[4];
 };
 
 
@@ -57,10 +59,13 @@ static struct platform_device spi_master = {
 };
 
 /*---------- Register Access ------------*/
+#if 0
 static int gpio_read8(struct spi_device *spi, int cmd)
 {
 	int ret;
+    gpio_direction_output(GPIO_EN, 0);
 	ret = spi_w8r8(spi, cmd);
+    gpio_direction_output(GPIO_EN, 1);
 	return ret;
 }
 
@@ -73,22 +78,95 @@ static int gpio_read16(struct spi_device *spi, int cmd)
 }
 */
 
+#endif
 static int gpio_write8(struct spi_device *spi, int cmd, u8 val)
 {
 	u8 tmp[2] = {cmd, val};
 	return spi_write(spi, tmp, sizeof(tmp));
 }
-
 /*---------- SYSFS Interface ------------*/
 
-static ssize_t show_cmd(struct device *dev, struct device_attribute *attr, char *buf)
+static ssize_t show_numcmd(struct device *dev, struct device_attribute *attr, char *buf)
 {
     int ret;
-	struct gpio_data *pdata = dev_get_drvdata(dev);
+    struct gpio_data *pdata = dev_get_drvdata(dev);
 
     mutex_lock(&pdata->lock);
 
-    ret = sprintf(buf, "%d\n", pdata->cmd);
+    ret = sprintf(buf, "%d\n", pdata->numcmd);
+    
+    mutex_unlock(&pdata->lock);
+
+    return ret;
+}
+
+static ssize_t set_numcmd(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
+{
+    struct gpio_data *pdata = dev_get_drvdata(dev);
+    uint8_t numcmd;
+    int error;
+
+    mutex_lock(&pdata->lock);
+
+    error = kstrtou8(buf, 0, &numcmd);
+    if (error) {
+        mutex_unlock(&pdata->lock);
+        return error;
+    }
+    pdata->numcmd = numcmd;
+
+    mutex_unlock(&pdata->lock);
+
+    return count;
+}
+static DEVICE_ATTR(numcmd, S_IWUSR | S_IRUGO, show_numcmd, set_numcmd);
+
+static ssize_t show_numrw(struct device *dev, struct device_attribute *attr, char *buf)
+{
+    int ret;
+    struct gpio_data *pdata = dev_get_drvdata(dev);
+
+    mutex_lock(&pdata->lock);
+    
+    ret = sprintf(buf, "%d\n", pdata->numrw);
+
+    mutex_unlock(&pdata->lock);
+
+    return ret;
+}
+
+static ssize_t set_numrw(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
+{
+    struct gpio_data *pdata = dev_get_drvdata(dev);
+    uint8_t numrw;
+    int error;
+
+    mutex_lock(&pdata->lock);
+
+    error = kstrtou8(buf, 0, &numrw);
+    if (error) {
+        mutex_unlock(&pdata->lock);
+        return error;
+    }
+    pdata->numrw = numrw;
+    
+    mutex_unlock(&pdata->lock);
+
+    return count;
+}
+static DEVICE_ATTR(numrw, S_IWUSR | S_IRUGO, show_numrw, set_numrw);
+
+static ssize_t show_cmd(struct device *dev, struct device_attribute *attr, char *buf)
+{
+    int ret, i, index = 0;
+    unsigned char strbuf[256];
+	struct gpio_data *pdata = dev_get_drvdata(dev);
+
+    mutex_lock(&pdata->lock);
+    for (i = 0; i < pdata->numcmd; i++)
+        index += sprintf(strbuf+index, "0x%.02x ", pdata->cmd[i]);
+    
+    ret = sprintf(buf, "%s\n", strbuf);
 
     mutex_unlock(&pdata->lock);
 
@@ -99,17 +177,31 @@ static ssize_t set_cmd(struct device *dev, struct device_attribute *attr, const 
 {
 	struct gpio_data *pdata = dev_get_drvdata(dev);
 	u8 cmd;
-	int error;
-	
+    char byte[8];
+	int error, n, i;
+
     mutex_lock(&pdata->lock);
 
-	error = kstrtou8(buf, 10, &cmd);
-	if (error) {
+    sscanf(buf, " %s%n", byte, &n);
+    buf += n;
+    error = kstrtou8(byte, 0, &cmd);
+    if (error) {
         mutex_unlock(&pdata->lock);
-		return error;
+        return error;
     }
-	pdata->cmd = cmd;
-	
+    pdata->numcmd = cmd;
+
+    for (i = 0; i < pdata->numcmd; i++) {
+        sscanf(buf, " %s%n", byte, &n);
+        buf += n;
+        error = kstrtou8(byte, 0, &cmd);
+        if (error) {
+            mutex_unlock(&pdata->lock);
+            return error;
+        }
+        pdata->cmd[i] = cmd;
+
+    }
     mutex_unlock(&pdata->lock);
 
 	return count;
@@ -119,15 +211,47 @@ static DEVICE_ATTR(cmd, S_IWUSR | S_IRUGO, show_cmd, set_cmd);
 
 static ssize_t show_data(struct device *dev, struct device_attribute *attr, char *buf)
 {
-    int ret;
+    int ret, i, index = 0;
 	struct spi_device *spi = to_spi_device(dev);
 	struct gpio_data *pdata = dev_get_drvdata(dev);
 
+    unsigned char charbuf[32];
+    unsigned char outbuf[256];
+
+    struct spi_transfer x[2] = { { .tx_dma = 0, }, };
+    struct spi_message msg;
+    unsigned int addr;
+    uint8_t *command;
+    int status;
+
+    command = pdata->cmd;
+
+    spi_message_init(&msg);
+
+    x[0].tx_buf = command;
+    x[0].len = pdata->numcmd;
+    spi_message_add_tail(&x[0], &msg);
+
+    x[1].rx_buf = charbuf;
+    x[1].len = pdata->numrw;
+    spi_message_add_tail(&x[1], &msg);
+
     mutex_lock(&pdata->lock);
 
-    ret = sprintf(buf, "%d\n", gpio_read8(spi, pdata->cmd));
+    gpio_direction_output(GPIO_EN, 0);
+
+    status = spi_sync(spi, &msg);
+
+    //ret = sprintf(buf, "0x%.02x\n", gpio_read8(spi, pdata->cmd));
+
+    gpio_direction_input(GPIO_EN);
 
     mutex_unlock(&pdata->lock);
+
+    for (i = 0; i < pdata->numrw; i++)
+        index += sprintf(outbuf+index, "0x%.02x ", charbuf[i]);
+
+    ret = sprintf(buf, "%s\n", outbuf);
 
 	return ret;
 }
@@ -137,18 +261,40 @@ static ssize_t set_data(struct device *dev, struct device_attribute *attr, const
 	struct spi_device *spi = to_spi_device(dev);
 	struct gpio_data *pdata = dev_get_drvdata(dev);
 	u8 val;
-	int error;
-	
-    mutex_lock(&pdata->lock);
-		
-	error = kstrtou8(buf, 10, &val);
-	
-    if (error) {
-        mutex_unlock(&pdata->lock);
-		return error;
+    char writebuf[256];
+    char byte[9];
+	int error, ret, i, n, status;
+    struct spi_transfer x[2] = { { .tx_dma = 0, }, };
+    struct spi_message msg;
+    uint8_t *command;
+
+    for (i = 0; i < pdata->numrw; i++) {
+        sscanf(buf, " %s%n", byte, &n);
+        buf += n;
+        error = kstrtou8(byte, 0, &val);
+        if (error) 
+            return error;
+        writebuf[i] = val;
     }
+    
+    command = pdata->cmd;
+
+    spi_message_init(&msg);
+    x[0].tx_buf = command;
+    x[0].len = pdata->numcmd;
+    spi_message_add_tail(&x[0], &msg);
+
+    x[1].tx_buf = writebuf;
+    x[1].len = pdata->numrw;
+    spi_message_add_tail(x+1, &msg);
+
+    mutex_lock(&pdata->lock);
 	
-	gpio_write8(spi, pdata->cmd, val);
+    gpio_direction_output(GPIO_EN, 0);
+
+    status = spi_sync(spi, &msg);
+
+    gpio_direction_input(GPIO_EN);
 
     mutex_unlock(&pdata->lock);
 
@@ -175,7 +321,7 @@ static const struct gpio spi_gpios[] __initconst_or_module = {
     },
     {
         .gpio   = GPIO_EN,
-        .flags  = GPIOF_OUT_INIT_HIGH,
+        .flags  = GPIOF_DIR_IN,
         .label  = "gpio-en",
     },
     {
@@ -217,6 +363,8 @@ static DEVICE_ATTR(lock, S_IWUSR | S_IRUGO, show_lock, set_lock);
 
 static struct attribute *gpio_attributes[] = {
 	&dev_attr_cmd.attr,
+    &dev_attr_numrw.attr,
+    &dev_attr_numcmd.attr,
 	&dev_attr_data.attr,
     &dev_attr_lock.attr,
     NULL
@@ -317,9 +465,9 @@ static int __init gpio_modinit(void)
 
 	platform_device_register(&spi_master);
 
-	printk(KERN_INFO PFX "add_gpio_to_bus()...\n");
+	printk("add_gpio_to_bus()...\n");
 	add_gpio_device_to_bus();
-	printk(KERN_INFO PFX "add_gpio_to_bus() done.\n");
+	printk("add_gpio_to_bus() done.\n");
 
     gpio_free_array(spi_gpios, ARRAY_SIZE(spi_gpios));    
 
@@ -329,7 +477,7 @@ module_init(gpio_modinit);
 
 static void __exit gpio_modexit(void)
 {
-	printk(KERN_INFO PFX "gpio-spi exit.\n");
+	printk("gpio-spi exit.\n");
     platform_device_unregister(&spi_master);
 }
 module_exit(gpio_modexit);
