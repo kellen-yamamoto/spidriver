@@ -1,14 +1,9 @@
 #include <linux/clk.h>
-#include <linux/etherdevice.h>
 #include <linux/gpio.h>
 #include <linux/irq.h>
-#include <linux/i2c.h>
-#include <linux/i2c-gpio.h>
 #include <linux/init.h>
-#include <linux/linkage.h>
 #include <linux/platform_device.h>
 #include <linux/types.h>
-#include <linux/leds.h>
 #include <linux/spi/spi.h>
 #include <linux/spi/spi_gpio.h>
 #include <linux/spi/spi_bitbang.h>
@@ -22,12 +17,18 @@
 #define GPIO4 24
 #define GPIO5 2
 
+/* GPIO Pin mapping */
+/* Built in spi driver has chip enable on GPIO5
+ * but can't be remapped, instead chip enable is manipulated
+ * manually before and after transactions
+ */
 #define GPIO_SCK GPIO2
 #define GPIO_MOSI GPIO3
 #define GPIO_MISO GPIO4
 #define GPIO_EN GPIO1
 #define GPIO_RESERVED GPIO5
 
+/* SPI bus settings */
 #define SPI_BUS 1
 #define SPI_BUS_CS1 0
 #define SPI_BUS_CS2 1
@@ -58,69 +59,15 @@ static struct platform_device spi_master = {
 	}
 };
 
-/*---------- Register Access ------------*/
-#if 0
-static int gpio_read8(struct spi_device *spi, int cmd)
-{
-	int ret;
-    gpio_direction_output(GPIO_EN, 0);
-	ret = spi_w8r8(spi, cmd);
-    gpio_direction_output(GPIO_EN, 1);
-	return ret;
-}
 
-/*
-static int gpio_read16(struct spi_device *spi, int cmd)
-{
-	int ret;
-	ret = spi_w8r16(spi, cmd);
-	return ret;
-}
-*/
-
-#endif
-static int gpio_write8(struct spi_device *spi, int cmd, u8 val)
-{
-	u8 tmp[2] = {cmd, val};
-	return spi_write(spi, tmp, sizeof(tmp));
-}
 /*---------- SYSFS Interface ------------*/
+/*
+ * Sysfs device attr files will accept decimal or hex values 
+ * if it has a 0x prefix.  Files that accept multiple bytes 
+ * requires the bytes to be separated by spaces 
+ */
 
-static ssize_t show_numcmd(struct device *dev, struct device_attribute *attr, char *buf)
-{
-    int ret;
-    struct gpio_data *pdata = dev_get_drvdata(dev);
-
-    mutex_lock(&pdata->lock);
-
-    ret = sprintf(buf, "%d\n", pdata->numcmd);
-    
-    mutex_unlock(&pdata->lock);
-
-    return ret;
-}
-
-static ssize_t set_numcmd(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
-{
-    struct gpio_data *pdata = dev_get_drvdata(dev);
-    uint8_t numcmd;
-    int error;
-
-    mutex_lock(&pdata->lock);
-
-    error = kstrtou8(buf, 0, &numcmd);
-    if (error) {
-        mutex_unlock(&pdata->lock);
-        return error;
-    }
-    pdata->numcmd = numcmd;
-
-    mutex_unlock(&pdata->lock);
-
-    return count;
-}
-static DEVICE_ATTR(numcmd, S_IWUSR | S_IRUGO, show_numcmd, set_numcmd);
-
+/* Sysfs file that controls the number of bytes to read or write in a SPI message */
 static ssize_t show_numrw(struct device *dev, struct device_attribute *attr, char *buf)
 {
     int ret;
@@ -156,6 +103,10 @@ static ssize_t set_numrw(struct device *dev, struct device_attribute *attr, cons
 }
 static DEVICE_ATTR(numrw, S_IWUSR | S_IRUGO, show_numrw, set_numrw);
 
+/* Sysfs file that sets the command bytes of an SPI message 
+ * The first byte contains the number of command bytes followed
+ * by the command bytes 
+ */
 static ssize_t show_cmd(struct device *dev, struct device_attribute *attr, char *buf)
 {
     int ret, i, index = 0;
@@ -209,20 +160,20 @@ static ssize_t set_cmd(struct device *dev, struct device_attribute *attr, const 
 
 static DEVICE_ATTR(cmd, S_IWUSR | S_IRUGO, show_cmd, set_cmd);
 
+/* Sysfs file that initiates read or write transactions */
 static ssize_t show_data(struct device *dev, struct device_attribute *attr, char *buf)
 {
     int ret, i, index = 0;
 	struct spi_device *spi = to_spi_device(dev);
 	struct gpio_data *pdata = dev_get_drvdata(dev);
 
-    unsigned char charbuf[32];
-    unsigned char outbuf[256];
+    unsigned char charbuf[128];
+    unsigned char outbuf[128*5+1];
 
     struct spi_transfer x[2] = { { .tx_dma = 0, }, };
     struct spi_message msg;
     unsigned int addr;
     uint8_t *command;
-    int status;
 
     command = pdata->cmd;
 
@@ -240,9 +191,7 @@ static ssize_t show_data(struct device *dev, struct device_attribute *attr, char
 
     gpio_direction_output(GPIO_EN, 0);
 
-    status = spi_sync(spi, &msg);
-
-    //ret = sprintf(buf, "0x%.02x\n", gpio_read8(spi, pdata->cmd));
+    spi_sync(spi, &msg);
 
     gpio_direction_input(GPIO_EN);
 
@@ -261,9 +210,9 @@ static ssize_t set_data(struct device *dev, struct device_attribute *attr, const
 	struct spi_device *spi = to_spi_device(dev);
 	struct gpio_data *pdata = dev_get_drvdata(dev);
 	u8 val;
-    char writebuf[256];
+    char writebuf[128];
     char byte[9];
-	int error, ret, i, n, status;
+	int error, ret, i, n;
     struct spi_transfer x[2] = { { .tx_dma = 0, }, };
     struct spi_message msg;
     uint8_t *command;
@@ -292,7 +241,7 @@ static ssize_t set_data(struct device *dev, struct device_attribute *attr, const
 	
     gpio_direction_output(GPIO_EN, 0);
 
-    status = spi_sync(spi, &msg);
+    spi_sync(spi, &msg);
 
     gpio_direction_input(GPIO_EN);
 
@@ -330,6 +279,12 @@ static const struct gpio spi_gpios[] __initconst_or_module = {
     },
 };
 
+/* Sysfs file that reserves GPIOs for transactions 
+ * Reading from lock will return lock status
+ *      1: free
+ *      0: busy
+ * Writing anything to lock will free it
+ */
 static ssize_t show_lock(struct device *dev, struct device_attribute *attr, char *buf)
 {
     int ret;
@@ -364,7 +319,6 @@ static DEVICE_ATTR(lock, S_IWUSR | S_IRUGO, show_lock, set_lock);
 static struct attribute *gpio_attributes[] = {
 	&dev_attr_cmd.attr,
     &dev_attr_numrw.attr,
-    &dev_attr_numcmd.attr,
 	&dev_attr_data.attr,
     &dev_attr_lock.attr,
     NULL
@@ -375,6 +329,9 @@ static const struct attribute_group gpio_group = {
 };
 
 /*---------- Module Setup/Cleanup ------*/
+/* Registers SPI driver with Kernel and allows
+ * it to use built in modules spi-gpio and spi-bitbang
+ */
 
 static int __init add_gpio_device_to_bus(void)
 {
@@ -455,9 +412,6 @@ static int __init add_gpio_device_to_bus(void)
 
 	return status;
 }
-
-
-
 
 static int __init gpio_modinit(void)
 {
